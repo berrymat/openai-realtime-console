@@ -1,67 +1,37 @@
-import { useEffect, useState } from "react";
+// ToolPanel.jsx
+import { useState, useEffect, useRef } from "react";
+import PropTypes from "prop-types";
+import * as ColorPaletteTool from "./tools/ColorPaletteTool";
+import * as MemoryTool from "./tools/MemoryTool";
+import * as WeatherTool from "./tools/WeatherTool";
+import * as IssTool from "./tools/IssTool";
 
-const functionDescription = `
-Call this function when a user asks for a color palette.
-`;
+// If you have more tools, just import them and add to this array
+const allTools = [
+  ColorPaletteTool,
+  MemoryTool,
+  WeatherTool,
+  IssTool,
+  // e.g. AnotherTool...
+];
 
-const sessionUpdate = {
-  type: "session.update",
-  session: {
-    tools: [
-      {
-        type: "function",
-        name: "display_color_palette",
-        description: functionDescription,
-        parameters: {
-          type: "object",
-          strict: true,
-          properties: {
-            theme: {
-              type: "string",
-              description: "Description of the theme for the color scheme.",
-            },
-            colors: {
-              type: "array",
-              description: "Array of five hex color codes based on the theme.",
-              items: {
-                type: "string",
-                description: "Hex color code",
-              },
-            },
-          },
-          required: ["theme", "colors"],
-        },
-      },
-    ],
-    tool_choice: "auto",
-  },
+ToolPanel.propTypes = {
+  isSessionActive: PropTypes.bool.isRequired,
+  sendClientEvent: PropTypes.func.isRequired,
+  events: PropTypes.arrayOf(
+    PropTypes.shape({
+      type: PropTypes.string.isRequired,
+      response: PropTypes.shape({
+        output: PropTypes.arrayOf(
+          PropTypes.shape({
+            type: PropTypes.string,
+            name: PropTypes.string,
+          }),
+        ),
+      }),
+    }),
+  ).isRequired,
 };
-
-function FunctionCallOutput({ functionCallOutput }) {
-  const { theme, colors } = JSON.parse(functionCallOutput.arguments);
-
-  const colorBoxes = colors.map((color) => (
-    <div
-      key={color}
-      className="w-full h-16 rounded-md flex items-center justify-center border border-gray-200"
-      style={{ backgroundColor: color }}
-    >
-      <p className="text-sm font-bold text-black bg-slate-100 rounded-md p-2 border border-black">
-        {color}
-      </p>
-    </div>
-  ));
-
-  return (
-    <div className="flex flex-col gap-2">
-      <p>Theme: {theme}</p>
-      {colorBoxes}
-      <pre className="text-xs bg-gray-100 rounded-md p-2 overflow-x-auto">
-        {JSON.stringify(functionCallOutput, null, 2)}
-      </pre>
-    </div>
-  );
-}
 
 export default function ToolPanel({
   isSessionActive,
@@ -69,65 +39,78 @@ export default function ToolPanel({
   events,
 }) {
   const [functionAdded, setFunctionAdded] = useState(false);
-  const [functionCallOutput, setFunctionCallOutput] = useState(null);
+  const [functionCalls, setFunctionCalls] = useState({});
+  const eventIndex = useRef(0);
 
   useEffect(() => {
     if (!events || events.length === 0) return;
 
-    const firstEvent = events[events.length - 1];
-    if (!functionAdded && firstEvent.type === "session.created") {
-      sendClientEvent(sessionUpdate);
-      setFunctionAdded(true);
-    }
-
-    const mostRecentEvent = events[0];
-    if (
-      mostRecentEvent.type === "response.done" &&
-      mostRecentEvent.response.output
-    ) {
-      mostRecentEvent.response.output.forEach((output) => {
-        if (
-          output.type === "function_call" &&
-          output.name === "display_color_palette"
-        ) {
-          setFunctionCallOutput(output);
-          setTimeout(() => {
-            sendClientEvent({
-              type: "response.create",
-              response: {
-                instructions: `
-                ask for feedback about the color palette - don't repeat 
-                the colors, just ask if they like the colors.
-              `,
+    for (let i = eventIndex.current; i < events.length; i++) {
+      const { type, response } = events[i];
+      switch (type) {
+        case "session.created": {
+          // Register all tools on the first "session.created"
+          if (!functionAdded) {
+            const combinedSessionUpdate = {
+              type: "session.update",
+              session: {
+                tools: allTools.flatMap((tool) => tool.functionDefinitions),
+                tool_choice: "auto",
               },
-            });
-          }, 500);
+            };
+            sendClientEvent(combinedSessionUpdate);
+          }
+          break;
         }
-      });
+        case "response.done": {
+          response?.output?.forEach((output) => {
+            if (output.type === "function_call") {
+              const functionCall = {
+                ...output,
+                arguments: JSON.parse(output.arguments || "{}"),
+              };
+              setFunctionCalls((prev) => ({
+                ...prev,
+                [output.name]: [functionCall, ...(prev[output.name] || [])],
+              }));
+            }
+          });
+          break;
+        }
+      }
     }
+    eventIndex.current = events.length;
   }, [events]);
 
+  // Reset on session end
   useEffect(() => {
     if (!isSessionActive) {
       setFunctionAdded(false);
-      setFunctionCallOutput(null);
+      eventIndex.current = 0;
+    } else {
+      setFunctionCalls({});
     }
   }, [isSessionActive]);
 
   return (
-    <section className="h-full w-full flex flex-col gap-4">
-      <div className="h-full bg-gray-50 rounded-md p-4">
-        <h2 className="text-lg font-bold">Color Palette Tool</h2>
-        {isSessionActive ? (
-          functionCallOutput ? (
-            <FunctionCallOutput functionCallOutput={functionCallOutput} />
-          ) : (
-            <p>Ask for advice on a color palette...</p>
-          )
-        ) : (
-          <p>Start the session to use this tool...</p>
-        )}
-      </div>
+    <section className="flex flex-col gap-4">
+      {allTools.map(({ default: ToolComponent, functionDefinitions }) => {
+        const { name: key } = functionDefinitions[0];
+        const toolCalls = Object.fromEntries(
+          functionDefinitions.map((definition) => [
+            definition.name,
+            functionCalls[definition.name] || [],
+          ]),
+        );
+        return (
+          <div key={key} className="bg-gray-50 p-4 rounded">
+            <ToolComponent
+              toolCalls={toolCalls}
+              sendClientEvent={sendClientEvent}
+            />
+          </div>
+        );
+      })}
     </section>
   );
 }

@@ -35,16 +35,14 @@ function Event({ event, timestamp }) {
 
 export default function EventLog({ events }) {
   const eventsToDisplay = [];
-  let deltaEvents = {};
 
+  let lastEventType = null;
   events.forEach((event) => {
-    if (event.type.endsWith("delta")) {
-      if (deltaEvents[event.type]) {
-        // for now just log a single event per render pass
-        return;
-      } else {
-        deltaEvents[event.type] = event;
-      }
+    if (event.type.endsWith("delta") && event.type === lastEventType) {
+      // for now just log a single event per render pass
+      return;
+    } else {
+      lastEventType = event.type;
     }
 
     eventsToDisplay.push(
