@@ -37,7 +37,7 @@ export default function IssTool({ toolCalls, sendClientEvent }) {
 
       const latestFunctionCall = functionCalls[0];
 
-      const result = await fetch(`http://api.open-notify.org/iss-now.json`);
+      const result = await fetch(`https://api.wheretheiss.at/v1/satellites/25544`);
       const json = await result.json();
       console.log(json);
       setLocation(json);
